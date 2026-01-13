@@ -9,7 +9,13 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import pytz
 import feedparser
+import pytz
+import feedparser
+import pytz
+import feedparser
 from etf_monitor import ActiveETFMonitor
+import yfinance as yf
+from curl_cffi import requests as curequests
 
 # 보안 인증서 경고 무시
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -101,7 +107,7 @@ with st.sidebar:
     st.caption("Ver 2.0 - News & Rebalancing")
     st.markdown("---")
     
-    menu = st.radio("메뉴 선택", ["📌 시장 동향", "📰 글로벌 산업 뉴스", "📊 타임폴리오 실시간 PDF"])
+    menu = st.radio("메뉴 선택", ["📌 시장 동향", "🔍 기업 펀더멘털 스카우터", "📰 글로벌 산업 뉴스", "📊 타임폴리오 실시간 PDF"])
     
     if st.button("🔄 데이터 새로고침"):
         st.cache_data.clear()
@@ -128,6 +134,84 @@ if menu == "📌 시장 동향":
     
     if "KOSPI" in histories:
         st.line_chart(histories['KOSPI']['Close'])
+
+elif menu == "🔍 기업 펀더멘털 스카우터":
+    st.title("🔍 Stock Fundamental Scout")
+    st.markdown("관심 종목의 **핵심 펀더멘털 지표**와 **컨센서스**를 한눈에 파악하세요.")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        ticker_input = st.text_input("티커 입력 (예: NVDA, AAPL, 005930.KS)", "NVDA").strip().upper()
+    with col2:
+        st.write("") 
+        st.write("")
+        if st.button("스카우팅 시작"):
+            st.session_state['scout_trigger'] = True
+
+        if ticker_input:
+            try:
+                # SSL 인증서 검증 비활성화 & 브라우저 위장 세션 생성 (curl_cffi 사용)
+                # impersonate="chrome"을 사용하여 봇 탐지 우회
+                session = curequests.Session(impersonate="chrome")
+                session.verify = False
+                stock = yf.Ticker(ticker_input, session=session)
+                info = stock.info
+                
+                # 1. 헤더 정보
+                st.subheader(f"{info.get('longName', ticker_input)} ({ticker_input})")
+                
+                # 가격 정보
+                current_price = info.get('currentPrice', info.get('previousClose', 0))
+                target_price = info.get('targetMeanPrice', 0)
+                
+                # 2. 핵심 지표 카드
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("현재 주가", f"${current_price:,.2f}" if current_price else "N/A")
+                m2.metric("시가총액", f"${info.get('marketCap', 0)/1e9:,.1f} B" if info.get('marketCap') else "N/A")
+                m3.metric("52주 최고가", f"${info.get('fiftyTwoWeekHigh', 0):,.2f}")
+                m4.metric("목표주가 (Mean)", f"${target_price:,.2f}" if target_price else "N/A", 
+                          delta=f"{(target_price/current_price - 1)*100:.1f}% Upside" if target_price and current_price else None)
+
+                st.markdown("---")
+                
+                # 3. 상세 펀더멘털 탭
+                t1, t2 = st.tabs(["📊 밸류에이션 & 수익성", "📈 주가 차트"])
+                
+                with t1:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("##### 💎 밸류에이션")
+                        df_val = pd.DataFrame([
+                            {"지표": "Trailing P/E", "값": info.get('trailingPE', 'N/A')},
+                            {"지표": "Forward P/E", "값": info.get('forwardPE', 'N/A')},
+                            {"지표": "PEG Ratio", "값": info.get('pegRatio', 'N/A')},
+                            {"지표": "Price/Book (PBR)", "값": info.get('priceToBook', 'N/A')},
+                            {"지표": "Price/Sales (PSR)", "값": info.get('priceToSalesTrailing12Months', 'N/A')},
+                        ])
+                        st.dataframe(df_val, hide_index=True, use_container_width=True)
+                        
+                    with c2:
+                        st.markdown("##### 💰 수익성 & 배당")
+                        df_prf = pd.DataFrame([
+                            {"지표": "ROE", "값": f"{info.get('returnOnEquity', 0)*100:.2f}%" if info.get('returnOnEquity') else 'N/A'},
+                            {"지표": "Profit Margin", "값": f"{info.get('profitMargins', 0)*100:.2f}%" if info.get('profitMargins') else 'N/A'},
+                            {"지표": "Dividend Yield", "값": f"{info.get('dividendRate', 0)*100:.2f}%" if info.get('dividendRate') else 'N/A'},
+                            {"지표": "Beta", "값": info.get('beta', 'N/A')},
+                        ])
+                        st.dataframe(df_prf, hide_index=True, use_container_width=True)
+                    
+                    st.info(f"💡 {info.get('longBusinessSummary', '기업 설명 정보가 없습니다.')[:300]}...")
+
+                with t2:
+                    st.markdown("##### 최근 1년 주가 흐름")
+                    hist = stock.history(period="1y")
+                    if not hist.empty:
+                        st.line_chart(hist['Close'])
+                    else:
+                        st.warning("주가 데이터를 불러올 수 없습니다.")
+                        
+            except Exception as e:
+                st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}") 
 
 elif menu == "📰 글로벌 산업 뉴스":
     st.title("📰 Global Industry & Macro News")

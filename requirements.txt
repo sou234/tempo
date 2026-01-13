@@ -8,3 +8,4 @@ yfinance
 pytz
 feedparser
 openpyxl
+curl-cffi
