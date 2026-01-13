@@ -1,0 +1,10 @@
+streamlit
+pandas
+plotly
+finance-datareader
+requests
+beautifulsoup4
+yfinance
+pytz
+feedparser
+openpyxl
