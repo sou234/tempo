@@ -46,23 +46,57 @@ st.set_page_config(
 
 @st.cache_data(ttl=600)
 def fetch_market_data():
-    """시장 지수 수집"""
-    tickers = {"KOSPI": "KS11", "S&P500": "US500", "USD/KRW": "USD/KRW"}
+    """시장/거시 지표 수집 (yfinance + curl_cffi)"""
+    tickers = {
+        "KOSPI": "^KS11", 
+        "S&P500": "^GSPC", 
+        "USD/KRW": "KRW=X",
+        "Bitcoin": "BTC-USD",
+        "VIX (공포)": "^VIX",
+        "US 10Y (금리)": "^TNX",
+        "WTI Rough (유가)": "CL=F",
+        "Gold (금)": "GC=F"
+    }
     market_data, history_data = {}, {}
-    start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+    
+    # 세션 생성 (봇 탐지 우회)
+    session = curequests.Session(impersonate="chrome")
+    session.verify = False
 
     for name, ticker in tickers.items():
         try:
-            df = fdr.DataReader(ticker, start_date)
+            # yfinance로 데이터 수집
+            stock = yf.Ticker(ticker, session=session)
+            # 최근 1년치 (차트용) + 최근 데이터
+            df = stock.history(period="1y")
+            
             if not df.empty:
                 current = df['Close'].iloc[-1]
-                prev = df['Close'].iloc[-2]
-                pct = ((current - prev) / prev * 100) if prev != 0 else 0
+                # 전일 데이터가 있으면 변동 계산
+                if len(df) >= 2:
+                    prev = df['Close'].iloc[-2]
+                    pct = ((current - prev) / prev * 100)
+                    change = current - prev
+                else:
+                    change = 0
+                    pct = 0
+                
+                # 20일 이평선 트렌드
                 df['MA20'] = df['Close'].rolling(window=20).mean()
-                trend = "상승 (Bull)" if current > df['MA20'].iloc[-1] else "조정 (Bear)"
-                market_data[name] = {"price": current, "change": current - prev, "pct_change": pct, "trend": trend}
+                ma20 = df['MA20'].iloc[-1] if not pd.isna(df['MA20'].iloc[-1]) else current
+                trend = "상승 🐂" if current > ma20 else "하락 🐻"
+                
+                market_data[name] = {
+                    "price": current, 
+                    "change": change, 
+                    "pct_change": pct, 
+                    "trend": trend
+                }
                 history_data[name] = df
-        except: pass
+        except Exception as e:
+            print(f"Error fetching {name}: {e}")
+            pass
+            
     return market_data, history_data
 
 @st.cache_data(ttl=1800)
@@ -118,22 +152,47 @@ with st.sidebar:
 
 if menu == "📌 시장 동향":
     st.title("📈 Global Market Monitor")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if "KOSPI" in metrics:
-            d = metrics["KOSPI"]
-            st.metric("KOSPI", f"{d['price']:,.2f}", f"{d['pct_change']:.2f}%")
-    with col2:
-        if "S&P500" in metrics:
-            d = metrics["S&P500"]
-            st.metric("S&P 500", f"{d['price']:,.2f}", f"{d['pct_change']:.2f}%")
-    with col3:
-        if "USD/KRW" in metrics:
-            d = metrics["USD/KRW"]
-            st.metric("원/달러 환율", f"{d['price']:,.2f}", f"{d['pct_change']:.2f}%", delta_color="inverse")
     
-    if "KOSPI" in histories:
-        st.line_chart(histories['KOSPI']['Close'])
+    # 8개 지표를 4열 2행으로 배치
+    row1_cols = st.columns(4)
+    row2_cols = st.columns(4)
+    
+    indicators_row1 = ["KOSPI", "S&P500", "USD/KRW", "Bitcoin"]
+    indicators_row2 = ["VIX (공포)", "US 10Y (금리)", "WTI Rough (유가)", "Gold (금)"]
+    
+    def display_metric(col, key):
+        if key in metrics:
+            d = metrics[key]
+            current_val = d['price']
+            
+            # 포맷팅 설정 (지수/상품마다 다름)
+            if "KRW" in key:
+                fmt = "{:,.2f}원"
+            elif "VIX" in key or "10Y" in key:
+                fmt = "{:,.2f}"
+            else:
+                fmt = "{:,.2f}"
+            
+            col.metric(
+                label=key,
+                value=fmt.format(current_val),
+                delta=f"{d['change']:+.2f} ({d['pct_change']:+.2f}%) / {d['trend']}",
+                delta_color="inverse" if "KRW" in key or "VIX" in key or "10Y" in key else "normal"
+            )
+            
+            # 미니 차트 (확장기능)
+            if key in histories and not histories[key].empty:
+                col.line_chart(histories[key]['Close'], height=100)
+
+    # 1열 출력
+    for col, key in zip(row1_cols, indicators_row1):
+        display_metric(col, key)
+        
+    st.markdown("---")
+        
+    # 2열 출력
+    for col, key in zip(row2_cols, indicators_row2):
+        display_metric(col, key)
 
 elif menu == "🔍 기업 펀더멘털 스카우터":
     st.title("🔍 Stock Fundamental Scout")
